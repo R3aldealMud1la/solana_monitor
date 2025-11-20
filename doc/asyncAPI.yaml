@@ -1,0 +1,8 @@
+asyncapi: 2.0.0
+info:
+  title: Solana Blockchain Monitor
+  version: '0.0.0'
+  description: |
+    SMOTRI TYT https://www.asyncapi.com/blog/websocket-part2
+    для отлажки вебсокетов использовать websocat
+
