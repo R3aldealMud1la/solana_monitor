@@ -1,39 +1,66 @@
-use axum::{
-    routing::post,
-    extract::Json,
-    Router,
-};
-use serde_json::Value;
-use std::net::SocketAddr;
+mod analyzer;
+mod config;
+mod helius;
+mod moralis;
+mod telegram;
 
-async fn webhook_handler(Json(payload): Json<Value>) {
-    println!("Got webhook payload: {payload}");
+use analyzer::Analyzer;
+use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use config::AppConfig;
+use helius::HeliusWebhook;
+use std::{net::SocketAddr, sync::Arc};
+use tracing::{error, info};
+
+#[derive(Clone)]
+struct AppState {
+    analyzer: Analyzer,
+}
+
+async fn webhook_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<HeliusWebhook>,
+) -> StatusCode {
+    let analyzer = state.analyzer.clone();
+    tokio::spawn(async move {
+        if let Err(err) = analyzer.process_event(payload).await {
+            error!(error = ?err, "analyzer_error");
+        }
+    });
+
+    StatusCode::ACCEPTED
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .json()
+        .with_level(true)
+        .init();
+
+    let config = AppConfig::from_env()?;
+    let analyzer = Analyzer::new(&config);
+    let app_state = Arc::new(AppState { analyzer });
+
     let app = Router::new()
-        .route("/webhook", post(webhook_handler));
+        .route("/webhook", post(webhook_handler))
+        .with_state(app_state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    println!("Listening on http://{addr}");
+    info!("listening on http://{addr}/webhook");
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("Failed to bind address");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server error");
+    Ok(())
 }
 
-
-    /*роли: система, пользователь
+/*роли: система, пользователь
     //
     //Как пользователь,
      я хочу получать в Telegram-боте уведомления
       об необычных транзакциях в блокчейне Solana,
-       отфильтрованные по рыночной капитализации токена, 
+       отфильтрованные по рыночной капитализации токена,
        чтобы быстро реагировать на значимые события.
     //
     задачи:
@@ -102,7 +129,7 @@ log: "user changed min_cap=100000 max_cap=500000"
                                             РАБОТА САМОГО СКРИПТА
                                             Helius Webhook (слушает Solana события)
                                                            +
-                                            Конфигуриремый профиль по market cap               
+                                            Конфигуриремый профиль по market cap
     ↓
    Rust скрипт:
                                        ├ фильтрует по типу события (swap, mint, transfer)
